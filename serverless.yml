@@ -1,0 +1,199 @@
+service: aurora-serverless-test
+
+frameworkVersion: ">=1.28.0 <2.0.0"
+
+provider:
+  name: aws
+  runtime: go1.x
+  timeout: 30
+  region: us-east-1
+  environment:
+    TZ: Asia/Tokyo
+    DB_USER: ${self:resources.Resources.AuroraServerless.Properties.MasterUsername}
+    DB_PASSWORD: ${self:resources.Resources.AuroraServerless.Properties.MasterUserPassword}
+    DB_ENDPOINT_ADDRESS: 
+      Fn::GetAtt: [ AuroraServerless, Endpoint.Address ]
+    DB_ENDPOINT_PORT: ${self:resources.Resources.AuroraServerless.Properties.Port}
+    DB_DATABASE: ${self:resources.Resources.AuroraServerless.Properties.DatabaseName}
+  vpc:
+    securityGroupIds:
+      - !Ref TestSecurityGroup
+    subnetIds:
+      - !Ref TestPrivateSubnet1
+      - !Ref TestPrivateSubnet2
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "ec2:CreateNetworkInterface"
+        - "ec2:DescribeNetworkInterfaces"
+        - "ec2:DeleteNetworkInterface"
+      Resource:
+        - "*"
+
+package:
+ exclude:
+   - ./**
+ include:
+   - ./bin/**
+
+functions:
+  aurora:
+    handler: bin/aurora
+    events:
+      - http:
+          path: aurora
+          method: get
+
+resources:
+  Resources:
+    # VPC & Subnet
+    TestVPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: 172.32.0.0/24
+        Tags:
+          - Key: Name
+            Value: test-vpc
+    TestPublicSubnet:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref TestVPC
+        CidrBlock: 172.32.0.0/25
+        AvailabilityZone: us-east-1d
+        Tags:
+          - Key: Name
+            Value: test-public-subnet1
+    TestPrivateSubnet1:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref TestVPC
+        CidrBlock: 172.32.0.129/26
+        AvailabilityZone: us-east-1a
+        Tags:
+          - Key: Name
+            Value: test-private-subnet1
+    TestPrivateSubnet2:
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref TestVPC
+        CidrBlock: 172.32.0.193/26
+        AvailabilityZone: us-east-1b
+        Tags:
+          - Key: Name
+            Value: test-private-subnet2
+
+    # InternetGateway
+    TestInternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+        Tags:
+          - Key: Name
+            Value: test-igw
+    VPCGatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId: !Ref TestVPC
+        InternetGatewayId: !Ref TestInternetGateway
+    TestPublicRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref TestVPC
+        Tags:
+          - Key: Name
+            Value: test-public-route-table
+    TestPublicRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref TestPublicRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId: !Ref TestInternetGateway
+    TestPublicSubnetRouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref TestPublicSubnet
+        RouteTableId: !Ref TestPublicRouteTable
+
+    # NATGateway
+    TestEIP:
+      Type: AWS::EC2::EIP
+      Properties:
+        Domain: vpc
+    TestNatGateway:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt TestEIP.AllocationId
+        SubnetId: !Ref TestPublicSubnet
+        Tags:
+          - Key: Name
+            Value: TestNatGateway
+    TestPrivateRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref TestVPC
+        Tags:
+          - Key: Name
+            Value: test-private-route-table
+    TestPrivateRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId: !Ref TestPrivateRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        NatGatewayId: !Ref TestNatGateway
+    TestPrivateSubnet1RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref TestPrivateSubnet1
+        RouteTableId: !Ref TestPrivateRouteTable
+    TestPrivateSubnet2RouteTableAssociation:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId: !Ref TestPrivateSubnet2
+        RouteTableId: !Ref TestPrivateRouteTable
+
+    # SecurityGroup
+    TestSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        VpcId: !Ref TestVPC
+        GroupName: test-sg
+        GroupDescription: test security group
+        Tags:
+          - Key: Name
+            Value: test-sg
+    TestSecurityGroupIngress:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        GroupId: !Ref TestSecurityGroup
+        SourceSecurityGroupId: !Ref TestSecurityGroup
+        IpProtocol: -1
+        FromPort: -1
+        ToPort: -1
+
+    # Aurora Serverless
+    TestSubnetGroup:
+      Type: "AWS::RDS::DBSubnetGroup"
+      Properties: 
+        DBSubnetGroupDescription: test subnet group
+        SubnetIds:
+          - !Ref TestPrivateSubnet1
+          - !Ref TestPrivateSubnet2
+        Tags:
+          - Key: Name
+            Value: test-subnet-group
+    AuroraServerless:
+      Type: AWS::RDS::DBCluster
+      Properties:
+        Engine: aurora
+        EngineMode: serverless
+        DeletionProtection: false
+        Port: 3306
+        DatabaseName: test
+        MasterUsername: test
+        MasterUserPassword: testtest
+        DBSubnetGroupName: !Ref TestSubnetGroup
+        VpcSecurityGroupIds:
+          - !Ref TestSecurityGroup
+        ScalingConfiguration:
+          AutoPause: true
+          MaxCapacity: 2
+          SecondsUntilAutoPause: 300
