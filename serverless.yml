@@ -9,12 +9,7 @@ provider:
   region: us-east-1
   environment:
     TZ: Asia/Tokyo
-    DB_USER: ${self:resources.Resources.AuroraServerless.Properties.MasterUsername}
-    DB_PASSWORD: ${self:resources.Resources.AuroraServerless.Properties.MasterUserPassword}
-    DB_ENDPOINT_ADDRESS: 
-      Fn::GetAtt: [ AuroraServerless, Endpoint.Address ]
-    DB_ENDPOINT_PORT: ${self:resources.Resources.AuroraServerless.Properties.Port}
-    DB_DATABASE: ${self:resources.Resources.AuroraServerless.Properties.DatabaseName}
+    DB_SECRET: !Ref AuroraSecret
   vpc:
     securityGroupIds:
       - !Ref TestSecurityGroup
@@ -29,6 +24,11 @@ provider:
         - "ec2:DeleteNetworkInterface"
       Resource:
         - "*"
+    - Effect: "Allow"
+      Action:
+        - secretsmanager:Get*
+      Resource: 
+        - !Ref AuroraSecret
 
 package:
  exclude:
@@ -170,6 +170,20 @@ resources:
         ToPort: -1
 
     # Aurora Serverless
+    AuroraSecret:
+      Type: AWS::SecretsManager::Secret
+      Properties:
+        GenerateSecretString:
+          SecretStringTemplate: '{"username": "test"}'
+          GenerateStringKey: 'password'
+          PasswordLength: 16
+          ExcludeCharacters: '"@/\'
+    SecretRDSInstanceAttachment:
+      Type: AWS::SecretsManager::SecretTargetAttachment
+      Properties:
+        SecretId: !Ref AuroraSecret
+        TargetId: !Ref AuroraServerless
+        TargetType: AWS::RDS::DBCluster
     TestSubnetGroup:
       Type: "AWS::RDS::DBSubnetGroup"
       Properties: 
@@ -188,8 +202,8 @@ resources:
         DeletionProtection: false
         Port: 3306
         DatabaseName: test
-        MasterUsername: test
-        MasterUserPassword: testtest
+        MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:username}}' ]]
+        MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref AuroraSecret, ':SecretString:password}}' ]]
         DBSubnetGroupName: !Ref TestSubnetGroup
         VpcSecurityGroupIds:
           - !Ref TestSecurityGroup

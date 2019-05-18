@@ -6,28 +6,53 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/sambaiz/aurora-serverless-test/secret"
 )
 
-var dbSrc = fmt.Sprintf(
-	"%s:%s@tcp(%s:%s)/%s?parseTime=true",
-	os.Getenv("DB_USER"),
-	os.Getenv("DB_PASSWORD"),
-	os.Getenv("DB_ENDPOINT_ADDRESS"),
-	os.Getenv("DB_ENDPOINT_PORT"),
-	os.Getenv("DB_DATABASE"),
-)
+type dbConfig struct {
+	Password string `json:"password"`
+	DbName   string `json:"dbname"`
+	Engine   string `json:"engine"`
+	Port     int    `json:"port"`
+	Host     string `json:"host"`
+	UserName string `json:"username"`
+}
+
+func dbSrc() (string, error) {
+	secret, err := secret.GetSecretString(os.Getenv("DB_SECRET"))
+	if err != nil {
+		return "", err
+	}
+	var config dbConfig
+	if err := json.Unmarshal([]byte(secret), &config); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(
+		"%s:%s@tcp(%s:%d)/%s?parseTime=true",
+		config.UserName,
+		config.Password,
+		config.Host,
+		config.Port,
+		config.DbName,
+	), nil
+}
 
 type Response events.APIGatewayProxyResponse
 
 // Handler is our lambda handler invoked by the `lambda.Start` function call
 func Handler(ctx context.Context) (Response, error) {
-
+	dbSrc, err := dbSrc()
+	if err != nil {
+		return Response{StatusCode: http.StatusInternalServerError}, err
+	}
+	log.Printf("dbSrc: %s", dbSrc)
 	db, err := sql.Open("mysql", dbSrc)
 	if err != nil {
 		return Response{StatusCode: http.StatusInternalServerError}, err
